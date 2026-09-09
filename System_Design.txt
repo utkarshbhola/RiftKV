@@ -1,0 +1,2 @@
+RiftKV 
+A Redis-like data store that can run either as a standalone server or embedded directly inside a Go Application.

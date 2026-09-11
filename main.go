@@ -6,24 +6,31 @@ import (
 	"net"
 )
 
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	for {
+		value, err := readRESP(reader)
+		if err != nil {
+			return
+		}
+
+		fmt.Printf("Received: %#v\n", value)
+
+		conn.Write([]byte("+OK\r\n"))
+	}
+}
+
 func main() {
 	listener, _ := net.Listen("tcp", "127.0.0.1:6380")
-	fmt.Println("server started")
+
+	fmt.Println("RiftKV server started on 6380")
 
 	for {
 		conn, _ := listener.Accept()
 
-		go func() {
-			reader := bufio.NewReader(conn)
-
-			msg, _ := reader.ReadString('\n')
-			fmt.Print("Received: ", msg)
-
-			writer := bufio.NewWriter(conn)
-			writer.WriteString(msg)
-			writer.Flush()
-
-			conn.Close()
-		}()
+		go handleConnection(conn)
 	}
 }

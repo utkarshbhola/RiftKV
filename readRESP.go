@@ -8,6 +8,7 @@ import (
 
 func readRESP(reader *bufio.Reader) (interface{}, error) {
 	typeByte, err := reader.ReadByte()
+
 	if err != nil {
 		return nil, err
 	}

@@ -1,10 +1,29 @@
 package main
 
-import "log"
+import (
+	"bufio"
+	"fmt"
+	"net"
+)
 
 func main() {
-	srv := New()
-	if err := srv.Start("127.0.0.1:7570"); err != nil {
-		log.Fatal(err)
+	listener, _ := net.Listen("tcp", "127.0.0.1:6380")
+	fmt.Println("server started")
+
+	for {
+		conn, _ := listener.Accept()
+
+		go func() {
+			reader := bufio.NewReader(conn)
+
+			msg, _ := reader.ReadString('\n')
+			fmt.Print("Received: ", msg)
+
+			writer := bufio.NewWriter(conn)
+			writer.WriteString(msg)
+			writer.Flush()
+
+			conn.Close()
+		}()
 	}
 }

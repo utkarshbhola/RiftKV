@@ -4,10 +4,19 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"time"
+	"sync"
 )
 
-var KV = make(map[string]string)
+type Entry struct {
+	value string
+	expiration time.Time
+}
 
+var(
+	KV = make(map[string]Entry)
+	mu sync.RWMutex
+)
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -27,7 +36,9 @@ func handleConnection(conn net.Conn) {
 			key := command[1].(string)
 			value := command[2].(string)
 
-			KV[key] = value
+			mu.Lock()
+			KV[key] = Entry{value: value}
+			mu.Unlock()
 
 			conn.Write([]byte("+OK\r\n"))
 		}
@@ -35,10 +46,12 @@ func handleConnection(conn net.Conn) {
 		if command[0] == "GET" {
 			key := command[1].(string)
 
+			mu.RLock()
 			value, ok := KV[key]
+			mu.RUnlock()
 
 			if ok {
-				response := "$" + fmt.Sprint(len(value)) + "\r\n" + value + "\r\n"
+				response := "$" + fmt.Sprint(len(value.value)) + "\r\n" + value.value + "\r\n"
 				conn.Write([]byte(response))
 			} else {
 				conn.Write([]byte("$-1\r\n"))
@@ -51,7 +64,9 @@ func handleConnection(conn net.Conn) {
 			_, ok := KV[key]
 
 			if ok {
+				mu.Lock()
 				delete(KV, key)
+				mu.Unlock()
 				conn.Write([]byte(":1\r\n"))
 			} else {
 				conn.Write([]byte(":0\r\n"))
@@ -61,7 +76,11 @@ func handleConnection(conn net.Conn) {
 			conn.Write([]byte("+PONG\r\n"))
 		}
 		if command[0] == "EXISTS" {
-			if _, ok := KV[command[1].(string)]; ok {
+			mu.RLock()
+			_, ok := KV[command[1].(string)]
+			mu.RUnlock()
+
+			if ok {
 				conn.Write([]byte(":1\r\n"))
 			} else {
 				conn.Write([]byte(":0\r\n"))

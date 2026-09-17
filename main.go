@@ -17,6 +17,18 @@ var(
 	KV = make(map[string]Entry)
 	mu sync.RWMutex
 )
+func ExpireEntries() {
+	for {
+		time.Sleep(1 * time.Second)
+		mu.Lock()
+		for key, entry := range KV {
+			if time.Now().After(entry.expiration) {
+				delete(KV, key)
+			}
+		}
+		mu.Unlock()
+	}
+}
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -98,5 +110,7 @@ func main() {
 		conn, _ := listener.Accept()
 
 		go handleConnection(conn)
+		//I want to expire those entries of which the TTL has been reached. So I will call the ExpireEntries function in a separate goroutine.
+		go ExpireEntries()
 	}
 }

@@ -4,32 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
-	"sync"
 )
 
-type Entry struct {
-	value string
-	expiration time.Time
-}
-
-var(
-	KV = make(map[string]Entry)
-	mu sync.RWMutex
-)
-func ExpireEntries() {
-	for {
-		time.Sleep(1 * time.Second)
-		mu.Lock()
-		for key, entry := range KV {
-			if time.Now().After(entry.expiration) {
-				delete(KV, key)
-			}
-		}
-		mu.Unlock()
-	}
-}
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, store *Store) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
@@ -40,77 +20,120 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
-		command := value.([]interface{})
-
-		fmt.Printf("Received: %#v\n", command)
-
-		if command[0] == "SET" {
-			key := command[1].(string)
-			value := command[2].(string)
-
-			mu.Lock()
-			KV[key] = Entry{value: value}
-			mu.Unlock()
-
-			conn.Write([]byte("+OK\r\n"))
+		command, ok := value.([]interface{})
+		if !ok {
+			conn.Write([]byte("-ERR invalid command\r\n"))
+			return
 		}
 
-		if command[0] == "GET" {
+		if len(command) == 0 {
+			continue
+		}
+
+		switch command[0] {
+		case "SET":
+			if len(command) < 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for SET\r\n"))
+				continue
+			}
+
 			key := command[1].(string)
+			data := command[2].(string)
+			ttl := time.Duration(0)
 
-			mu.RLock()
-			value, ok := KV[key]
-			mu.RUnlock()
+			if len(command) >= 5 {
+				if strings.EqualFold(command[3].(string), "EX") {
+					seconds, err := strconv.Atoi(command[4].(string))
+					if err != nil {
+						conn.Write([]byte("-ERR invalid TTL\r\n"))
+						continue
+					}
+					ttl = time.Duration(seconds) * time.Second
+				}
+			}
 
+			if err := store.Set(key, data, ttl); err != nil {
+				conn.Write([]byte("-ERR failed to persist value\r\n"))
+				continue
+			}
+			conn.Write([]byte("+OK\r\n"))
+
+		case "GET":
+			if len(command) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for GET\r\n"))
+				continue
+			}
+
+			key := command[1].(string)
+			value, ok := store.Get(key)
 			if ok {
-				response := "$" + fmt.Sprint(len(value.value)) + "\r\n" + value.value + "\r\n"
+				response := "$" + fmt.Sprint(len(value)) + "\r\n" + value + "\r\n"
 				conn.Write([]byte(response))
 			} else {
 				conn.Write([]byte("$-1\r\n"))
 			}
-		}
 
-		if command[0] == "DEL" {
+		case "DEL":
+			if len(command) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for DEL\r\n"))
+				continue
+			}
+
 			key := command[1].(string)
-
-			_, ok := KV[key]
-
-			if ok {
-				mu.Lock()
-				delete(KV, key)
-				mu.Unlock()
+			if _, ok := store.Get(key); ok {
+				if err := store.Delete(key); err != nil {
+					conn.Write([]byte("-ERR failed to delete key\r\n"))
+					continue
+				}
 				conn.Write([]byte(":1\r\n"))
 			} else {
 				conn.Write([]byte(":0\r\n"))
 			}
-		}
-		if command[0] == "PING" {
+
+		case "PING":
 			conn.Write([]byte("+PONG\r\n"))
-		}
-		if command[0] == "EXISTS" {
-			mu.RLock()
-			_, ok := KV[command[1].(string)]
-			mu.RUnlock()
 
-			if ok {
+		case "EXISTS":
+			if len(command) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for EXISTS\r\n"))
+				continue
+			}
+
+			if store.Exists(command[1].(string)) {
 				conn.Write([]byte(":1\r\n"))
 			} else {
 				conn.Write([]byte(":0\r\n"))
 			}
+
+		default:
+			conn.Write([]byte("-ERR unknown command\r\n"))
 		}
 	}
 }
 
 func main() {
-	listener, _ := net.Listen("tcp", "127.0.0.1:6380")
+	store, err := NewStore("riftkv.wal")
+	if err != nil {
+		fmt.Println("failed to initialize store:", err)
+		return
+	}
+	defer store.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:6380")
+	if err != nil {
+		fmt.Println("failed to start server:", err)
+		return
+	}
+	defer listener.Close()
 
 	fmt.Println("RiftKV server started on 6380")
 
 	for {
-		conn, _ := listener.Accept()
+		conn, err := listener.Accept()
+		if err != nil {
+			continue
+		}
 
-		go handleConnection(conn)
-		//I want to expire those entries of which the TTL has been reached. So I will call the ExpireEntries function in a separate goroutine.
-		go ExpireEntries()
+		go handleConnection(conn, store)
 	}
 }

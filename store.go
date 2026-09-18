@@ -1,0 +1,1 @@
+// owns the in-memory key-value store and provides methods to interact with it.
